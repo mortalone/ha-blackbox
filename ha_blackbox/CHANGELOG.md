@@ -8,6 +8,7 @@
 - **Persistent HA-notifikationskø i SQLite (`notified_ha`)**: Kritiske hændelser, der opstod mens Core var nede eller før en genstart/strømafbrydelse, gemmer leveringsstatus i SQLite og leveres som persistent notifikation i Home Assistant, så snart Core er oppe igen.
 - **Live telemetri til Home Assistant og delt filsystem**: Udgiver løbende status til `sensor.ha_blackbox_status` i Home Assistant samt `/share/ha_blackbox/latest_status.json`.
 - **WebSocket-synkronisering af kamera `preload_stream`**: Synkroniserer `.storage/camera`-præferencer ind i Home Assistant Cores hukommelse ved opstart.
+- **Retter WebSocket `Cannot write to closing transport` på store installationer (>10.000 entities)**: Sætter `max_msg_size=0` på event-WebSocket og springer `config/entity_registry/list` over på WS, når Entity Registry allerede er indlæst fra `.storage/core.entity_registry` (hvor svaret ellers oversteg `aiohttp`s 4 MB grænse og tvang forbindelsen over på SSE fallback).
 - **System-fane udvidet**: Viser status for **Core Auto-Heal** og **Fault Log (`SIGABRT`/`SIGSEGV`)** direkte i brugerfladen.
 - 30 tests.
 

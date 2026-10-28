@@ -239,7 +239,7 @@ class HAEventMonitor:
         headers = {"Authorization": f"Bearer {self.token}"}
         self.last_failure_stage = "websocket_connect"
         async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-            async with session.ws_connect(self.ws_url, autoping=True) as ws:
+            async with session.ws_connect(self.ws_url, autoping=True, max_msg_size=0) as ws:
                 self._current_ws = ws
                 self.last_failure_stage = "websocket_handshake"
                 first = await ws.receive_json(timeout=10)
@@ -252,7 +252,9 @@ class HAEventMonitor:
                     raise RuntimeError(f"Home Assistant websocket auth failed: {auth}")
 
                 self.last_failure_stage = "entity_registry"
-                await self._refresh_entity_registry(ws)
+                self._load_entity_registry_from_storage()
+                if not self.entity_registry:
+                    await self._refresh_entity_registry(ws)
 
                 subscriptions = (
                     (1, "state_changed"),
