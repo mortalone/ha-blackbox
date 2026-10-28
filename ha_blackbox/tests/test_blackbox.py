@@ -10,13 +10,14 @@ sys.path.insert(0, str(APP))
 
 from analyzer import Analyzer, LOG_PATTERNS, log_pattern_applies, SUPERVISOR_APP_WATCHDOG_RE
 from config import Settings
-from log_monitor import classify_log
+from log_monitor import classify_log, inspect_fault_log
 from storage import Storage
 from churn_analysis import classify_entity, summarize_groups, suspected_flap_source
 from diagnostic_context import redact, redact_text, analyze_zigbee2mqtt, addon_context
 from ai_export import build_ai_summary, build_file_index
 from notifier import DirectNotifier
 from event_monitor import HAEventMonitor
+from main import CoreAutoHealWatchdog
 
 
 class ConfigTests(unittest.TestCase):
@@ -407,6 +408,223 @@ class AIExportTests(unittest.TestCase):
         self.assertEqual(summary["schema"], "ha-blackbox-ai-summary-v1")
         self.assertTrue(summary["recommended_ai_workflow"])
         self.assertIn("AI-START-HERE.md", build_file_index()["files"])
+
+
+class FaultLogAndAutoHealTests(unittest.TestCase):
+    SAMPLE_FAULT_DUMP = """Fatal Python error: Aborted
+
+Thread 0x00007f54d4be7b20 (most recent call first):
+  File "/usr/local/lib/python3.14/concurrent/futures/thread.py", line 89 in _worker
+
+Current thread 0x00007f54ca25eb20 [stream_worker] (most recent call first):
+  File "/usr/src/homeassistant/homeassistant/components/stream/worker.py", line 428 in close
+  File "/usr/src/homeassistant/homeassistant/components/stream/worker.py", line 825 in stream_worker
+  File "/usr/local/lib/python3.14/threading.py", line 1024 in run
+"""
+
+    def test_inspect_fault_log_extracts_stream_worker_crash(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fault_path = Path(tmp) / "home-assistant.log.fault"
+            fault_path.write_text(self.SAMPLE_FAULT_DUMP)
+            info = inspect_fault_log(str(fault_path))
+            self.assertTrue(info["found"])
+            self.assertEqual(info["signal"], "Aborted")
+            self.assertEqual(info["crashing_thread"], "stream_worker")
+            self.assertEqual(info["suspected_component"], "stream")
+            self.assertEqual(info["top_frame"], "homeassistant/components/stream/worker.py:428 in close")
+            self.assertTrue(info["signature_key"])
+
+    def test_ingest_fault_log_creates_incident_and_enriches_correlated_incidents(self):
+        import asyncio
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Storage(str(Path(tmp) / "fault.db"))
+            fault_path = Path(tmp) / "home-assistant.log.fault"
+            fault_path.write_text(self.SAMPLE_FAULT_DUMP)
+            fault_info = inspect_fault_log(str(fault_path))
+            now = fault_info["mtime_ts"]
+
+            db.save_incident({
+                "id": "core1",
+                "start_ts": now + 10,
+                "end_ts": now + 3600,
+                "status": "closed",
+                "severity": "critical",
+                "category": "core_unresponsive",
+                "title": "Home Assistant Core API svarer ikke",
+                "confidence": 85,
+                "summary": "Core API svarede ikke.",
+                "recommendation": "Tjek log.",
+                "evidence": ["core_api_ok=false"],
+                "context": {},
+                "acknowledged": False,
+                "updated_ts": now + 3600,
+            })
+            db.save_incident({
+                "id": "reboot1",
+                "start_ts": now + 3605,
+                "end_ts": now + 3605,
+                "status": "closed",
+                "severity": "critical",
+                "category": "host_reboot",
+                "title": "Uventet genstart eller strømtab registreret",
+                "confidence": 65,
+                "summary": "Genstart uden tydelig fejl.",
+                "recommendation": "Tjek strøm.",
+                "evidence": [],
+                "context": {},
+                "acknowledged": False,
+                "updated_ts": now + 3605,
+            })
+
+            class DummySupervisor:
+                async def fire_event(self, *_args, **_kwargs):
+                    return None
+
+                async def notify(self, *_args, **_kwargs):
+                    return None
+
+            analyzer = Analyzer(Settings(), db, DummySupervisor())
+            inc = asyncio.run(analyzer.ingest_fault_log(fault_info, now=now + 3610))
+            self.assertIsNotNone(inc)
+            self.assertEqual(inc["category"], "native_fault_crash")
+            self.assertEqual(inc["confidence"], 96)
+            self.assertIn("stream_worker", inc["summary"])
+
+            # Calling again with identical signature must deduplicate
+            self.assertIsNone(asyncio.run(analyzer.ingest_fault_log(fault_info, now=now + 3620)))
+
+            # Verify retroactive enrichment of core_unresponsive and host_reboot
+            enriched_core = db.get_incident("core1")
+            self.assertEqual(enriched_core["confidence"], 96)
+            self.assertIn("stream_worker", enriched_core["summary"])
+            self.assertIn("WebRTC", enriched_core["recommendation"])
+
+            enriched_reboot = db.get_incident("reboot1")
+            self.assertEqual(enriched_reboot["confidence"], 95)
+            self.assertIn("Fatal Python error: Aborted", enriched_reboot["summary"])
+            db.close()
+
+    def test_persistent_notification_queue_survives_restart(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Storage(str(Path(tmp) / "notify.db"))
+            now = time.time()
+            db.save_incident({
+                "id": "unnotified1",
+                "start_ts": now - 60,
+                "end_ts": now - 10,
+                "status": "closed",
+                "severity": "critical",
+                "category": "core_unresponsive",
+                "title": "Core nede",
+                "confidence": 90,
+                "summary": "Core nede",
+                "recommendation": "Tjek",
+                "evidence": [],
+                "context": {},
+                "acknowledged": False,
+                "notified_ha": False,
+                "updated_ts": now - 10,
+            })
+            unnotified = db.list_unnotified_incidents(now - 3600)
+            self.assertEqual(len(unnotified), 1)
+            self.assertEqual(unnotified[0]["id"], "unnotified1")
+
+            db.mark_incident_notified("unnotified1")
+            self.assertEqual(len(db.list_unnotified_incidents(now - 3600)), 0)
+            db.close()
+
+    def test_auto_heal_watchdog_restarts_stuck_core_when_safe(self):
+        import asyncio
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Storage(str(Path(tmp) / "autoheal.db"))
+            settings = Settings(
+                auto_restart_unresponsive_core=True,
+                core_unresponsive_restart_seconds=180,
+                core_restart_cooldown_minutes=30,
+            )
+            settings._normalize()
+
+            class FakeSupervisor:
+                def __init__(self):
+                    self.restarts = 0
+                    self.active_jobs = []
+
+                async def jobs_info(self):
+                    return {"jobs": self.active_jobs}
+
+                async def restart_core(self):
+                    self.restarts += 1
+                    return {"result": "ok"}
+
+                async def sync_camera_preload_prefs(self, _path="/homeassistant/.storage/camera"):
+                    return {"synced": 1, "updated": ["camera.doorbellcamera=False"], "status": "ok"}
+
+                async def set_ha_state(self, *_args, **_kwargs):
+                    return None
+
+                async def fire_event(self, *_args, **_kwargs):
+                    return None
+
+                async def notify(self, *_args, **_kwargs):
+                    return None
+
+            sup = FakeSupervisor()
+            analyzer = Analyzer(settings, db, sup)
+            analyzer.ever_api_ok = True
+            analyzer.ever_supervisor_ok = True
+            watchdog = CoreAutoHealWatchdog(
+                settings=settings,
+                client=sup,
+                storage=db,
+                analyzer=analyzer,
+                fault_log_path=str(Path(tmp) / "nonexistent.fault"),
+                share_status_path=str(Path(tmp) / "latest_status.json"),
+            )
+
+            def make_sample(ts: float, api_ok: bool) -> dict:
+                return {
+                    "ts": ts,
+                    "api_ok": api_ok,
+                    "api_ms": 10.0 if api_ok else None,
+                    "core_cpu": 5.0,
+                    "core_mem_pct": 20.0,
+                    "host_mem_pct": 40.0,
+                    "disk_pct": 30.0,
+                    "load1": 0.3,
+                    "state_rate": 5.0,
+                    "call_rate": 0.2,
+                    "auto_rate": 0.1,
+                    "unavail_rate": 0.0,
+                    "extra": {"supervisor_ok": True},
+                }
+
+            async def scenario():
+                t0 = 10000.0
+                # Core fails at t0
+                await watchdog.on_sample(make_sample(t0, False))
+                self.assertEqual(sup.restarts, 0)
+
+                # Still below 180s threshold at t0 + 120
+                await watchdog.on_sample(make_sample(t0 + 120, False))
+                self.assertEqual(sup.restarts, 0)
+
+                # If a backup job is running at t0 + 190, auto-heal must defer
+                sup.active_jobs = [{"name": "backup_full", "done": False}]
+                await watchdog.on_sample(make_sample(t0 + 190, False))
+                self.assertEqual(sup.restarts, 0)
+
+                # Backup finishes at t0 + 200 -> auto-heal triggers restart_core()
+                sup.active_jobs = []
+                await watchdog.on_sample(make_sample(t0 + 200, False))
+                self.assertEqual(sup.restarts, 1)
+                self.assertEqual(watchdog.last_action["status"], "completed")
+
+                # Respects cooldown (30 min = 1800s) at t0 + 400
+                await watchdog.on_sample(make_sample(t0 + 400, False))
+                self.assertEqual(sup.restarts, 1)
+
+            asyncio.run(scenario())
+            db.close()
 
 
 if __name__ == "__main__":

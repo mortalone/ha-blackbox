@@ -48,6 +48,7 @@ class WebApp:
         events: HAEventMonitor,
         logs: LogMonitor,
         started_ts: float,
+        watchdog=None,
     ) -> None:
         self.settings = settings
         self.storage = storage
@@ -56,6 +57,7 @@ class WebApp:
         self.events = events
         self.logs = logs
         self.started_ts = started_ts
+        self.watchdog = watchdog
         self.static_dir = Path(__file__).parent / "static"
         self._churn_analysis_ts = 0.0
         self._churn_analysis_cache: dict = {}
@@ -148,6 +150,8 @@ class WebApp:
             "current": current,
             "event_websocket_connected": self.events.connected,
             "event_monitor": self.events.status(),
+            "fault_log": self.analyzer.last_fault_info,
+            "auto_heal": self.watchdog.status() if self.watchdog else None,
             "top_entities_hour": top_hour,
             "top_automations_hour": automations_hour,
             "top_flappers_hour": hour_flappers[:10],

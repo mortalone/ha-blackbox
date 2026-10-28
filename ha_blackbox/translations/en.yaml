@@ -5,6 +5,15 @@ configuration:
   persist_interval_seconds:
     name: Persistence interval
     description: How often samples are written to the Black Box database.
+  auto_restart_unresponsive_core:
+    name: Auto-restart unresponsive Home Assistant Core
+    description: Automatically restart Home Assistant Core via Supervisor if Supervisor is healthy and Core API is unresponsive for the duration below (when no backup/update job is active).
+  core_unresponsive_restart_seconds:
+    name: Seconds before Core auto-restart
+    description: How long Home Assistant Core API must be continuously unreachable (while Supervisor responds) before Black Box triggers a Core restart.
+  core_restart_cooldown_minutes:
+    name: Cooldown between Core auto-restarts
+    description: Minimum minutes between automatic Core restart attempts.
   monitor_all_apps:
     name: Monitor all apps
     description: Collect resource statistics for all running apps/add-ons.

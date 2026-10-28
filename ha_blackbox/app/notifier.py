@@ -7,7 +7,10 @@ import time
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
-import aiohttp
+try:
+    import aiohttp
+except ModuleNotFoundError:  # pragma: no cover - unit tests without aiohttp installed
+    aiohttp = None  # type: ignore[assignment]
 
 from config import Settings
 from diagnostic_context import redact_text

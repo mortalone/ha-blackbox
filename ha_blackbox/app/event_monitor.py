@@ -8,7 +8,10 @@ import time
 from collections import Counter, deque
 from pathlib import Path
 
-import aiohttp
+try:
+    import aiohttp
+except ModuleNotFoundError:  # pragma: no cover - unit tests without aiohttp installed
+    aiohttp = None  # type: ignore[assignment]
 
 from storage import Storage
 

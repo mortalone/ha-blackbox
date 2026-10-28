@@ -102,6 +102,7 @@ class Storage:
                 evidence_json TEXT NOT NULL,
                 context_json TEXT NOT NULL,
                 acknowledged INTEGER NOT NULL DEFAULT 0,
+                notified_ha INTEGER NOT NULL DEFAULT 0,
                 updated_ts REAL NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_incidents_start_ts ON incidents(start_ts DESC);
@@ -112,6 +113,9 @@ class Storage:
             );
             """
         )
+        cols = {row["name"] for row in self.db.execute("PRAGMA table_info(incidents)").fetchall()}
+        if "notified_ha" not in cols:
+            self.db.execute("ALTER TABLE incidents ADD COLUMN notified_ha INTEGER NOT NULL DEFAULT 0")
         self.db.commit()
 
     def save_sample(self, sample: dict) -> None:
@@ -178,13 +182,14 @@ class Storage:
             self.db.execute(
                 """INSERT INTO incidents
                 (id,start_ts,end_ts,status,severity,category,title,confidence,summary,recommendation,
-                 evidence_json,context_json,acknowledged,updated_ts)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                 evidence_json,context_json,acknowledged,notified_ha,updated_ts)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(id) DO UPDATE SET
                   end_ts=excluded.end_ts,status=excluded.status,severity=excluded.severity,
-                  confidence=excluded.confidence,summary=excluded.summary,
+                  title=excluded.title,confidence=excluded.confidence,summary=excluded.summary,
                   recommendation=excluded.recommendation,evidence_json=excluded.evidence_json,
                   context_json=excluded.context_json,acknowledged=excluded.acknowledged,
+                  notified_ha=MAX(incidents.notified_ha, excluded.notified_ha),
                   updated_ts=excluded.updated_ts""",
                 (
                     incident["id"], incident["start_ts"], incident.get("end_ts"), incident["status"],
@@ -192,10 +197,32 @@ class Storage:
                     incident["summary"], incident["recommendation"],
                     json.dumps(incident.get("evidence", []), ensure_ascii=False, separators=(",", ":")),
                     json.dumps(incident.get("context", {}), ensure_ascii=False, separators=(",", ":")),
-                    1 if incident.get("acknowledged") else 0, incident.get("updated_ts", time.time()),
+                    1 if incident.get("acknowledged") else 0,
+                    1 if incident.get("notified_ha") else 0,
+                    incident.get("updated_ts", time.time()),
                 ),
             )
             self.db.commit()
+
+    def mark_incident_notified(self, incident_id: str) -> bool:
+        with self._lock:
+            cur = self.db.execute(
+                "UPDATE incidents SET notified_ha=1, updated_ts=? WHERE id=?",
+                (time.time(), incident_id),
+            )
+            self.db.commit()
+            return cur.rowcount > 0
+
+    def list_unnotified_incidents(self, since_ts: float, limit: int = 20) -> list[dict]:
+        with self._lock:
+            rows = self.db.execute(
+                """SELECT * FROM incidents
+                WHERE start_ts>=? AND notified_ha=0 AND status!='ignored'
+                  AND (severity='critical' OR category IN ('host_reboot', 'native_fault_crash', 'core_unresponsive'))
+                ORDER BY start_ts ASC LIMIT ?""",
+                (since_ts, limit),
+            ).fetchall()
+        return [self._decode_incident(dict(r), include_context=False) for r in rows]
 
     def close_open_incidents(self, end_ts: float | None = None) -> int:
         """Close incidents left open by a previous Black Box process.
@@ -259,6 +286,7 @@ class Storage:
     @staticmethod
     def _decode_incident(row: dict, include_context: bool) -> dict:
         row["acknowledged"] = bool(row.get("acknowledged"))
+        row["notified_ha"] = bool(row.get("notified_ha"))
         for source, target in (("evidence_json", "evidence"), ("context_json", "context")):
             raw = row.pop(source, None)
             if target == "context" and not include_context:

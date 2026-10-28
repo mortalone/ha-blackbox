@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.14
+
+- **Detektion af native Python/C-crashes (`home-assistant.log.fault`)**: Læser og parser nu automatisk Python `faulthandler`-crashdumps (f.eks. `Fatal Python error: Aborted` / `Segmentation fault` i C-extensions som `PyAV` / `stream_worker`), udtrækker signal, crashende tråd, komponent og stack-frame, og opretter en høj-konfidens hændelse (`96%`).
+- **Retroaktiv korrelation af hændelser**: Når et fault-log-crash opdages, beriges korrelerede `core_unresponsive`- og `host_reboot`-hændelser automatisk med den præcise rodårsag og målrettet anbefaling (f.eks. at slå `preload_stream` fra og aktivere `enable_webrtc` på Frigate-kameraer), så et frosset Core efterfulgt af manuel sluk/tænd ikke længere fremstår som "ukendt strømtab".
+- **Aktiv Core Auto-Heal Watchdog**: Hvis Home Assistant Core API hænger i `502 Bad Gateway` / timeout i mere end `core_unresponsive_restart_seconds` (standard 180 sek.), mens Supervisor er sund og ingen backup/restore/update kører, udfører Black Box nu automatisk en kontrolleret `POST /core/restart` (med cooldown og max 2 genstarter pr. time).
+- **Persistent HA-notifikationskø i SQLite (`notified_ha`)**: Kritiske hændelser, der opstod mens Core var nede eller før en genstart/strømafbrydelse, gemmer leveringsstatus i SQLite og leveres som persistent notifikation i Home Assistant, så snart Core er oppe igen.
+- **Live telemetri til Home Assistant og delt filsystem**: Udgiver løbende status til `sensor.ha_blackbox_status` i Home Assistant samt `/share/ha_blackbox/latest_status.json`.
+- **WebSocket-synkronisering af kamera `preload_stream`**: Synkroniserer `.storage/camera`-præferencer ind i Home Assistant Cores hukommelse ved opstart.
+- **System-fane udvidet**: Viser status for **Core Auto-Heal** og **Fault Log (`SIGABRT`/`SIGSEGV`)** direkte i brugerfladen.
+- 30 tests.
+
 ## 0.1.13
 
 - Tilføjer direkte Home Assistant-genveje fra fund og tabeller: **Åbn enhed**, **Åbn integration** og **Åbn automation** når de nødvendige registry/state-metadata findes.

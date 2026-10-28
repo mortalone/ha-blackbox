@@ -69,6 +69,14 @@ LOG_PATTERNS = [
         "Supervisor/watchdog rapporterede en usund eller genstartet komponent.",
         "Brug tidslinjen før watchdog-hændelsen til at finde den oprindelige CPU/RAM/I/O/log-fejl.",
     ),
+    (
+        "native_fault_crash",
+        "Fatal Python crash (SIGABRT/SIGSEGV)",
+        re.compile(r"fatal python error:\s*\S+|segmentation fault|\bsigabrt\b|\bsigsegv\b", re.I),
+        96,
+        "Home Assistant Core døde af en fatal C/Python-fejl (fx SIGABRT/SIGSEGV i home-assistant.log.fault).",
+        "Se den crashede tråd og komponent i home-assistant.log.fault (fx stream_worker/PyAV). Deaktivér preload_stream og brug go2rtc/WebRTC ved kamera-crashes.",
+    ),
 ]
 
 SUPERVISOR_APP_WATCHDOG_RE = re.compile(
@@ -110,9 +118,17 @@ class Analyzer:
         self.warning_notification_last_attempt: dict[str, float] = {}
         self.ever_api_ok = False
         self.ever_supervisor_ok = False
+        self.last_fault_info: dict = {"found": False}
         self.metrics_provider: Callable[[int | None], list[dict]] = lambda _m=None: []
         self.logs_provider: Callable[[float | None, int], list[dict]] = lambda _s=None, _l=3000: []
         self.top_entities_provider: Callable[[float, int], list[dict]] = lambda _s, _l=10: []
+
+    def restore_pending_notifications(self, since_ts: float) -> int:
+        unnotified = self.storage.list_unnotified_incidents(since_ts)
+        for item in unnotified:
+            if item.get("id"):
+                self.pending_notifications.add(item["id"])
+        return len(unnotified)
 
     def set_context_providers(self, metrics_provider, logs_provider, top_entities_provider) -> None:
         self.metrics_provider = metrics_provider
@@ -467,7 +483,126 @@ class Analyzer:
                 )
                 return
 
-    async def create_reboot_postmortem(self, boot_logs: dict[str, str], boot_info: dict) -> None:
+    @staticmethod
+    def _fault_log_recommendation(fault_info: dict) -> tuple[str, str, str]:
+        signal_name = str(fault_info.get("signal") or "Fatal Python error")
+        thread_name = str(fault_info.get("crashing_thread") or "unknown")
+        comp = fault_info.get("suspected_component")
+        summary_da = str(fault_info.get("summary_da") or f"Fatal Python error: {signal_name}")
+        if thread_name == "stream_worker" or comp == "stream":
+            title = f"Home Assistant Core crashede i stream_worker ({signal_name})"
+            summary = (
+                f"Home Assistant Core døde af et C-level crash ({summary_da}) i PyAV/FFmpeg under lukning "
+                f"eller håndtering af en RTSP-kamerastream."
+            )
+            recommendation = (
+                "Deaktivér 'preload_stream' på kameraer i Home Assistant, aktivér indbygget WebRTC (enable_webrtc) "
+                "i Frigate-integrationen, og sørg for at live.streams peger på aktive go2rtc-substreams, så "
+                "Python PyAV stream_worker ikke kører unødigt i baggrunden."
+            )
+        else:
+            title = f"Home Assistant Core crashede ({signal_name})"
+            summary = f"Home Assistant Core døde af en fatal C/Python-fejl registreret i home-assistant.log.fault: {summary_da}."
+            recommendation = (
+                "Undersøg den crashede tråd og komponent i home-assistant.log.fault (ofte en C-extension som "
+                "PyAV/FFmpeg, Bluetooth eller lignende)."
+            )
+        return title, summary, recommendation
+
+    async def ingest_fault_log(self, fault_info: dict, now: float | None = None) -> dict | None:
+        self.last_fault_info = fault_info or {"found": False}
+        if not fault_info or not fault_info.get("found"):
+            return None
+
+        ts_now = float(now if now is not None else time.time())
+        mtime_ts = float(fault_info.get("mtime_ts") or ts_now)
+        sig_key = str(fault_info.get("signature_key") or "")
+        last_sig = self.storage.get_kv("fault_log_signature")
+        title, summary, recommendation = self._fault_log_recommendation(fault_info)
+        fault_evidence = [
+            f"home-assistant.log.fault (mtime={int(mtime_ts)}, crashes={fault_info.get('crash_count', 1)}): {fault_info.get('summary_da')}",
+            *[f"fault_log: {ln}" for ln in (fault_info.get("excerpt_lines") or [])[:12]],
+        ]
+
+        # Retroactively enrich any recent core_unresponsive or host_reboot incidents
+        # that occurred around or right after this native crash so nothing remains unexplained.
+        recent_incidents = self.storage.list_incidents(25)
+        for inc_summary in recent_incidents:
+            inc_cat = inc_summary.get("category")
+            inc_start = float(inc_summary.get("start_ts") or 0)
+            inc_end = float(inc_summary.get("end_ts") or inc_start)
+            correlates = False
+            if inc_cat == "core_unresponsive" and abs(inc_start - mtime_ts) <= 600:
+                correlates = True
+            elif inc_cat == "host_reboot" and 0 <= (inc_start - mtime_ts) <= 21600:
+                correlates = True
+            if correlates and "Fatal Python error" not in str(inc_summary.get("summary") or ""):
+                full_inc = self.storage.get_incident(inc_summary["id"])
+                if full_inc:
+                    if inc_cat == "core_unresponsive":
+                        duration_min = max(1, int((inc_end - inc_start) // 60)) if inc_end > inc_start else 0
+                        dur_str = f" i {duration_min} min" if duration_min else ""
+                        full_inc["title"] = f"Home Assistant Core nede efter {fault_info.get('crashing_thread') or 'native'} crash"
+                        full_inc["confidence"] = max(int(full_inc.get("confidence") or 80), 96)
+                        full_inc["summary"] = (
+                            f"Home Assistant Core svarede ikke{dur_str} (502 Bad Gateway), mens Supervisor og add-ons "
+                            f"kørte videre. Udfaldet blev udløst af: {fault_info.get('summary_da')}."
+                        )
+                        full_inc["recommendation"] = recommendation
+                    elif inc_cat == "host_reboot":
+                        full_inc["title"] = f"Host genstartet efter Core crash ({fault_info.get('crashing_thread') or 'Fatal Python error'})"
+                        full_inc["severity"] = "critical"
+                        full_inc["confidence"] = max(int(full_inc.get("confidence") or 59), 95)
+                        full_inc["summary"] = (
+                            f"Hosten blev genstartet efter at Home Assistant Core crashede med {fault_info.get('summary_da')} "
+                            f"og efterfølgende ikke svarede på API-kald."
+                        )
+                        full_inc["recommendation"] = recommendation
+                    existing_ev = list(full_inc.get("evidence") or [])
+                    for ev in fault_evidence:
+                        if ev not in existing_ev:
+                            existing_ev.append(ev)
+                    full_inc["evidence"] = existing_ev
+                    full_inc.setdefault("context", {})["fault_log"] = fault_info
+                    full_inc["updated_ts"] = ts_now
+                    self.storage.save_incident(full_inc)
+
+        if sig_key and sig_key == last_sig:
+            return None
+
+        # Only create a standalone native_fault_crash incident if it is within the last 48h
+        created_incident = None
+        if ts_now - mtime_ts <= 172800:
+            incident = self._make_incident(
+                category="native_fault_crash",
+                title=title,
+                severity="critical",
+                confidence=96,
+                summary=summary,
+                recommendation=recommendation,
+                evidence=fault_evidence,
+                sample=self.last_sample or {"ts": mtime_ts},
+                status="closed",
+            )
+            incident["start_ts"] = mtime_ts
+            incident["end_ts"] = mtime_ts
+            incident["context"]["fault_log"] = fault_info
+            self.storage.save_incident(incident)
+            self.pending_notifications.add(incident["id"])
+            created_incident = incident
+
+        if sig_key:
+            self.storage.set_kv("fault_log_signature", sig_key)
+        if self.pending_notifications:
+            await self._retry_notifications()
+        return created_incident
+
+    async def create_reboot_postmortem(
+        self,
+        boot_logs: dict[str, str],
+        boot_info: dict,
+        fault_info: dict | None = None,
+    ) -> None:
         combined_entries = []
         best = None
         for source, text in boot_logs.items():
@@ -478,22 +613,73 @@ class Analyzer:
                         if log_pattern_applies(pattern_tuple[0], source) and pattern_tuple[2].search(line):
                             if best is None or pattern_tuple[3] > best[3]:
                                 best = pattern_tuple
-        category, title, confidence, summary, recommendation = (
-            (best[0], f"Host genstartede – {best[1]}", best[3], best[4], best[5])
-            if best else
-            ("host_reboot", "Host genstartede", 45, "Black Box registrerede en ny host-boot, men fandt ingen entydig fejlsignatur i de hentede loglinjer.", "Gennemgå tidslinjen og forrige boot-log. Strømsvigt eller hard lock kan efterlade få spor.")
-        )
+
+        evidence = [
+            f"Ny host boot_timestamp: {boot_info.get('boot_timestamp')}",
+            "Postmortem analyseret fra forrige boot-log.",
+        ]
+
+        # Check if there was a preceding core_unresponsive incident right before the reboot
+        recent_outage = None
+        now_ts = time.time()
+        for item in self.storage.list_incidents(10):
+            if item.get("category") == "core_unresponsive":
+                end_ts = float(item.get("end_ts") or item.get("updated_ts") or 0)
+                if now_ts - end_ts <= 600:
+                    recent_outage = item
+                    break
+
+        if fault_info and fault_info.get("found") and (now_ts - float(fault_info.get("mtime_ts") or 0) <= 21600):
+            _f_title, _f_summary, f_rec = self._fault_log_recommendation(fault_info)
+            category = "host_reboot"
+            title = f"Host genstartet efter Core crash ({fault_info.get('crashing_thread') or 'Fatal Python error'})"
+            confidence = 96
+            outage_note = ""
+            if recent_outage:
+                dur_min = max(1, int((float(recent_outage.get("end_ts") or now_ts) - float(recent_outage.get("start_ts") or now_ts)) // 60))
+                outage_note = f" og var utilgængelig i ca. {dur_min} minutter"
+            summary = (
+                f"Hosten blev genstartet efter at Home Assistant Core crashede med {fault_info.get('summary_da')}"
+                f"{outage_note}."
+            )
+            recommendation = f_rec
+            severity = "critical"
+            evidence.append(f"home-assistant.log.fault: {fault_info.get('summary_da')}")
+            for ln in (fault_info.get("excerpt_lines") or [])[:8]:
+                evidence.append(f"fault_log: {ln}")
+        elif best:
+            category, title, confidence, summary, recommendation = (
+                best[0], f"Host genstartede – {best[1]}", best[3], best[4], best[5]
+            )
+            severity = "critical"
+        elif recent_outage:
+            dur_min = max(1, int((float(recent_outage.get("end_ts") or now_ts) - float(recent_outage.get("start_ts") or now_ts)) // 60))
+            category = "host_reboot"
+            title = "Host genstartet efter længere Core-udfald"
+            confidence = 88
+            summary = (
+                f"Hosten blev genstartet efter at Home Assistant Core havde været utilgængelig i ca. {dur_min} minutter, "
+                f"mens Supervisor og add-ons stadig kørte."
+            )
+            recommendation = "Undersøg det tilhørende 'Home Assistant Core svarer ikke normalt'-incident og home-assistant.log.fault for rodårsagen."
+            severity = "critical"
+            evidence.append(f"Forudgående Core-udfald: incident {recent_outage.get('id')} ({dur_min} min)")
+        else:
+            category = "host_reboot"
+            title = "Host genstartede"
+            confidence = 45
+            summary = "Black Box registrerede en ny host-boot, men fandt ingen entydig fejlsignatur i de hentede loglinjer."
+            recommendation = "Gennemgå tidslinjen og forrige boot-log. Strømsvigt eller hard lock kan efterlade få spor."
+            severity = "warning"
+
         incident = self._make_incident(
             category=category,
             title=title,
-            severity="critical" if best else "warning",
+            severity=severity,
             confidence=confidence,
             summary=summary,
             recommendation=recommendation,
-            evidence=[
-                f"Ny host boot_timestamp: {boot_info.get('boot_timestamp')}",
-                "Postmortem analyseret fra forrige boot-log.",
-            ],
+            evidence=evidence,
             sample=self.last_sample or {"ts": time.time()},
             status="closed",
         )
@@ -501,6 +687,8 @@ class Analyzer:
         incident["context"]["previous_boot_logs"] = {
             source: text.splitlines()[-1200:] for source, text in boot_logs.items()
         }
+        if fault_info and fault_info.get("found"):
+            incident["context"]["fault_log"] = fault_info
         self.storage.save_incident(incident)
         self.pending_notifications.add(incident["id"])
 
@@ -809,7 +997,8 @@ class Analyzer:
 
             # 3) Optional Home Assistant notification service. This can be a
             # persistent_notification or notify.mobile_app_*, but depends on Core.
-            if critical and self.settings.persistent_notifications:
+            should_notify_ha = critical or incident.get("category") in {"host_reboot", "native_fault_crash", "core_unresponsive"}
+            if should_notify_ha and self.settings.persistent_notifications:
                 if delivery.get("ha_notification", {}).get("status") != "sent":
                     try:
                         await self.client.notify(
@@ -840,11 +1029,12 @@ class Analyzer:
                     break
 
             expected = ["ha_event"]
-            if critical and self.settings.persistent_notifications:
+            if should_notify_ha and self.settings.persistent_notifications:
                 expected.append("ha_notification")
             if critical and self.settings.direct_critical_notifications and self.direct_notifier.configured():
                 expected.append("direct")
             if all(delivery.get(channel, {}).get("status") == "sent" for channel in expected):
+                self.storage.mark_incident_notified(incident_id)
                 self.pending_notifications.discard(incident_id)
 
     def notification_status(self) -> dict:

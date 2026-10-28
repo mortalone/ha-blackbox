@@ -6,7 +6,10 @@ import os
 import time
 from collections.abc import AsyncIterator
 
-import aiohttp
+try:
+    import aiohttp
+except ModuleNotFoundError:  # pragma: no cover - unit tests without aiohttp installed
+    aiohttp = None  # type: ignore[assignment]
 
 
 class APIError(RuntimeError):
@@ -113,6 +116,86 @@ class SupervisorClient:
 
     async def fire_event(self, event_type: str, data: dict) -> None:
         await self.ha_post(f"/events/{event_type}", data)
+
+    async def set_ha_state(self, entity_id: str, state: str, attributes: dict) -> None:
+        await self.ha_post(f"/states/{entity_id}", {"state": str(state), "attributes": attributes})
+
+    async def post(self, path: str, payload: dict | None = None, timeout: float = 30) -> dict | list:
+        try:
+            async with self.session.post(
+                self.base + path,
+                json=payload if payload is not None else {},
+                timeout=aiohttp.ClientTimeout(total=timeout),
+            ) as response:
+                text = await response.text()
+                if response.status >= 400:
+                    raise APIError(f"POST {path}: HTTP {response.status}: {text[:300]}")
+                if not text.strip():
+                    return {}
+                try:
+                    data = json.loads(text)
+                except json.JSONDecodeError as exc:
+                    raise APIError(f"POST {path}: invalid JSON") from exc
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            raise APIError(f"POST {path}: {exc}") from exc
+
+        if isinstance(data, dict) and data.get("result") in {"ok", "error"}:
+            if data.get("result") != "ok":
+                raise APIError(f"POST {path}: {data.get('message', 'Supervisor error')}")
+            return data.get("data", {})
+        return data
+
+    async def jobs_info(self) -> dict:
+        data = await self.get("/jobs/info", timeout=8)
+        return data if isinstance(data, dict) else {}
+
+    async def restart_core(self) -> dict:
+        data = await self.post("/core/restart", timeout=120)
+        return data if isinstance(data, dict) else {}
+
+    async def sync_camera_preload_prefs(self, camera_storage_path: str = "/homeassistant/.storage/camera") -> dict:
+        from pathlib import Path
+        p = Path(camera_storage_path)
+        if not p.exists():
+            return {"synced": 0, "status": "no_storage_file"}
+        try:
+            raw = json.loads(p.read_text(encoding="utf-8"))
+            cam_map = (raw.get("data") or {}) if isinstance(raw, dict) else {}
+        except (OSError, json.JSONDecodeError) as exc:
+            return {"synced": 0, "status": f"read_error:{exc}"}
+        if not cam_map or not self.token:
+            return {"synced": 0, "status": "empty_or_no_token"}
+
+        updated: list[str] = []
+        try:
+            async with self.session.ws_connect(
+                "ws://supervisor/core/api/websocket",
+                headers=self.headers,
+                timeout=8,
+            ) as ws:
+                first = await ws.receive_json(timeout=5)
+                if first.get("type") == "auth_required":
+                    await ws.send_json({"type": "auth", "access_token": self.token})
+                    auth_reply = await ws.receive_json(timeout=5)
+                    if auth_reply.get("type") != "auth_ok":
+                        return {"synced": 0, "status": "auth_failed"}
+                msg_id = 1
+                for entity_id, prefs in cam_map.items():
+                    if not isinstance(prefs, dict) or "preload_stream" not in prefs:
+                        continue
+                    await ws.send_json({
+                        "id": msg_id,
+                        "type": "camera/update_prefs",
+                        "entity_id": entity_id,
+                        "preload_stream": bool(prefs.get("preload_stream")),
+                    })
+                    reply = await ws.receive_json(timeout=5)
+                    if reply.get("success"):
+                        updated.append(f"{entity_id}={bool(prefs.get('preload_stream'))}")
+                    msg_id += 1
+        except Exception as exc:
+            return {"synced": len(updated), "updated": updated, "status": f"ws_error:{exc}"}
+        return {"synced": len(updated), "updated": updated, "status": "ok"}
 
     async def stream_lines(self, path: str, initial_lines: int = 100) -> AsyncIterator[str]:
         separator = "&" if "?" in path else "?"

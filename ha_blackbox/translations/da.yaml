@@ -20,6 +20,15 @@ configuration:
   recovery_minutes:
     name: Stabilisering efter fejl
     description: Minutter systemet skal være normalt før en aktiv hændelse lukkes.
+  auto_restart_unresponsive_core:
+    name: Auto-genstart frossen Home Assistant Core
+    description: Genstart automatisk Home Assistant Core via Supervisor, hvis Supervisor er sund og Core API ikke svarer i perioden nedenfor (og ingen backup/opdatering kører).
+  core_unresponsive_restart_seconds:
+    name: Sekunder før Core auto-genstart
+    description: Hvor længe Home Assistant Core API skal være uafbrudt nede (mens Supervisor svarer), før Black Box genstarter Core.
+  core_restart_cooldown_minutes:
+    name: Cooldown mellem Core auto-genstarter
+    description: Minimum antal minutter mellem automatiske Core-genstarter.
   monitor_all_apps:
     name: Overvåg alle apps/add-ons
     description: Hent ressourceforbrug for alle startede apps.

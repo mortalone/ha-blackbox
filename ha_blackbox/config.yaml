@@ -1,9 +1,9 @@
 name: "HA Black Box"
-version: "0.1.13"
+version: "0.1.14"
 slug: "ha_blackbox"
 description: >-
-  Independent flight recorder and incident diagnostics for Home Assistant.
-  Watches Core, Supervisor, storage, logs, Recorder growth and event churn.
+  Independent flight recorder, incident diagnostics and Core auto-heal watchdog for Home Assistant.
+  Watches Core, Supervisor, fault logs, storage, logs, Recorder growth and event churn.
 arch:
   - amd64
   - aarch64
@@ -27,6 +27,9 @@ map:
   - type: homeassistant_config
     read_only: true
     path: /homeassistant
+  - type: share
+    read_only: false
+    path: /share
 options:
   sample_interval_seconds: 5
   persist_interval_seconds: 15
@@ -35,6 +38,9 @@ options:
   important_log_retention_days: 7
   pre_incident_minutes: 30
   recovery_minutes: 5
+  auto_restart_unresponsive_core: true
+  core_unresponsive_restart_seconds: 180
+  core_restart_cooldown_minutes: 30
   monitor_all_apps: true
   excluded_apps: []
   persistent_notifications: true
@@ -74,6 +80,9 @@ schema:
   important_log_retention_days: "int(1,90)"
   pre_incident_minutes: "int(5,120)"
   recovery_minutes: "int(1,60)"
+  auto_restart_unresponsive_core: bool
+  core_unresponsive_restart_seconds: "int(60,3600)"
+  core_restart_cooldown_minutes: "int(5,360)"
   monitor_all_apps: bool
   excluded_apps:
     - str

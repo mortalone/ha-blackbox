@@ -14,6 +14,9 @@ class Settings:
     important_log_retention_days: int = 7
     pre_incident_minutes: int = 30
     recovery_minutes: int = 5
+    auto_restart_unresponsive_core: bool = True
+    core_unresponsive_restart_seconds: int = 180
+    core_restart_cooldown_minutes: int = 30
     monitor_all_apps: bool = True
     excluded_apps: list[str] = field(default_factory=list)
     persistent_notifications: bool = True
@@ -75,6 +78,9 @@ class Settings:
         self.persist_interval_seconds = max(5, min(300, int(self.persist_interval_seconds)))
         self.pre_incident_minutes = max(5, min(120, int(self.pre_incident_minutes)))
         self.recovery_minutes = max(1, min(60, int(self.recovery_minutes)))
+        self.auto_restart_unresponsive_core = bool(self.auto_restart_unresponsive_core)
+        self.core_unresponsive_restart_seconds = max(60, min(3600, int(self.core_unresponsive_restart_seconds)))
+        self.core_restart_cooldown_minutes = max(5, min(360, int(self.core_restart_cooldown_minutes)))
         self.excluded_apps = [str(x).strip() for x in self.excluded_apps if str(x).strip()]
         self.state_changes_warning_sustain_seconds = max(15, min(1800, int(self.state_changes_warning_sustain_seconds)))
         self.state_changes_clear_ratio = max(0.25, min(0.95, float(self.state_changes_clear_ratio)))
