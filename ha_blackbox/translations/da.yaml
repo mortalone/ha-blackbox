@@ -1,0 +1,76 @@
+configuration:
+  sample_interval_seconds:
+    name: Måleinterval
+    description: Sekunder mellem Core/Supervisor-målinger.
+  persist_interval_seconds:
+    name: Gemmeinterval
+    description: Hvor ofte målinger skrives til Black Box-databasen.
+  metric_retention_days:
+    name: Målehistorik
+    description: Antal dage med almindelige målinger.
+  incident_retention_days:
+    name: Hændelseshistorik
+    description: Antal dage med diagnosticerede hændelser.
+  important_log_retention_days:
+    name: Vigtige logs
+    description: Antal dage advarsler og fejl bevares.
+  pre_incident_minutes:
+    name: Før-hændelse buffer
+    description: Minutter med højopløselig historik der knyttes til en hændelse.
+  recovery_minutes:
+    name: Stabilisering efter fejl
+    description: Minutter systemet skal være normalt før en aktiv hændelse lukkes.
+  monitor_all_apps:
+    name: Overvåg alle apps/add-ons
+    description: Hent ressourceforbrug for alle startede apps.
+  excluded_apps:
+    name: Udelukkede apps
+    description: App-slugs der ikke skal ressourceovervåges.
+  persistent_notifications:
+    name: Home Assistant-notifikationer
+    description: Opret en notifikation ved kritiske hændelser.
+  notification_service:
+    name: Notifikationstjeneste
+    description: Service som domain.service, fx persistent_notification.create.
+  direct_critical_notifications:
+    name: Direkte kritiske notifikationer
+    description: Send kritiske alarmer direkte fra Black Box uden at bruge Home Assistant-automations eller Core servicekald.
+  direct_notification_provider:
+    name: Direkte notifikationskanal
+    description: Vælg disabled, ntfy, pushover, telegram eller webhook.
+  direct_warning_notifications:
+    name: Direkte advarsler
+    description: Valgfrit. Sender vedvarende advarsler som ntfy priority 4. Kritiske incidents bruger altid priority 5.
+  ntfy_server:
+    name: ntfy-server
+    description: Standard er https://ntfy.sh. Kan også være en selvhostet ntfy-server.
+  ntfy_topic:
+    name: ntfy-topic
+    description: Privat topic som telefonen abonnerer på. Behandles som følsom konfiguration.
+  ntfy_access_token:
+    name: ntfy access token
+    description: Valgfrit token til en beskyttet ntfy-server/topic.
+  ntfy_click_url:
+    name: ntfy klik-link
+    description: Valgfri HTTP/HTTPS-adresse der åbnes, når alarmen trykkes. Eksporteres aldrig i diagnosepakken.
+  pushover_user_key:
+    name: Pushover user key
+    description: Din Pushover user/group key.
+  pushover_app_token:
+    name: Pushover app token
+    description: API token for den Pushover-applikation Black Box skal bruge.
+  telegram_bot_token:
+    name: Telegram bot token
+    description: Token til Telegram-botten.
+  telegram_chat_id:
+    name: Telegram chat ID
+    description: Chat eller bruger som skal modtage kritiske alarmer.
+  direct_webhook_url:
+    name: Direkte webhook URL
+    description: HTTP/HTTPS endpoint der modtager en sanitiseret JSON-payload ved kritiske incidents.
+  direct_webhook_bearer_token:
+    name: Webhook bearer token
+    description: Valgfrit Authorization Bearer-token til webhook-endpointet.
+  recorder_db_path:
+    name: Recorder databasefil
+    description: Filnavn relativt til Home Assistant config-mappen. Standard er home-assistant_v2.db.

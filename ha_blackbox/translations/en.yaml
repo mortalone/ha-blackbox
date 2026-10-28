@@ -1,0 +1,55 @@
+configuration:
+  sample_interval_seconds:
+    name: Sample interval
+    description: Seconds between Core/Supervisor samples.
+  persist_interval_seconds:
+    name: Persistence interval
+    description: How often samples are written to the Black Box database.
+  monitor_all_apps:
+    name: Monitor all apps
+    description: Collect resource statistics for all running apps/add-ons.
+  persistent_notifications:
+    name: Home Assistant notifications
+    description: Create a notification for critical incidents.
+  direct_critical_notifications:
+    name: Direct critical notifications
+    description: Send critical alerts directly from Black Box without Home Assistant automations or Core service calls.
+  direct_notification_provider:
+    name: Direct notification provider
+    description: Choose disabled, ntfy, pushover, telegram or webhook.
+  direct_warning_notifications:
+    name: Direct warning notifications
+    description: Optional. Sends sustained warnings as ntfy priority 4. Critical incidents always use priority 5.
+  ntfy_server:
+    name: ntfy server
+    description: Defaults to https://ntfy.sh; self-hosted ntfy is supported.
+  ntfy_topic:
+    name: ntfy topic
+    description: Private topic subscribed to by your phone; treated as sensitive configuration.
+  ntfy_access_token:
+    name: ntfy access token
+    description: Optional token for a protected ntfy server/topic.
+  ntfy_click_url:
+    name: ntfy click URL
+    description: Optional HTTP/HTTPS URL opened when the alert is tapped. Never included in diagnosis exports.
+  pushover_user_key:
+    name: Pushover user key
+    description: Pushover user/group key.
+  pushover_app_token:
+    name: Pushover app token
+    description: API token for the Pushover application used by Black Box.
+  telegram_bot_token:
+    name: Telegram bot token
+    description: Token for the Telegram bot.
+  telegram_chat_id:
+    name: Telegram chat ID
+    description: Chat or user receiving critical alerts.
+  direct_webhook_url:
+    name: Direct webhook URL
+    description: HTTP/HTTPS endpoint receiving a sanitized JSON payload for critical incidents.
+  direct_webhook_bearer_token:
+    name: Webhook bearer token
+    description: Optional Authorization Bearer token for the webhook endpoint.
+  recorder_db_path:
+    name: Recorder database file
+    description: Filename relative to the Home Assistant configuration directory.

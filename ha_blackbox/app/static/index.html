@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="da">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HA Black Box</title>
+  <link rel="stylesheet" href="static/styles-0.1.13.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>HA Black Box</h1>
+      <div class="subtitle">Flight recorder og incident-diagnostik · UI 0.1.13 · <span id="js-version">JS afventer</span></div>
+    </div>
+    <div class="top-actions">
+      <span id="live-dot" class="dot"></span><span id="last-update">Indlæser…</span>
+      <a class="button ghost" href="api/export">Eksportér diagnosepakke</a>
+    </div>
+  </header>
+
+  <nav class="tabs" aria-label="Sektioner">
+    <button class="tab active" data-tab="overview">Overblik</button>
+    <button class="tab" data-tab="incidents">Incidenter</button>
+    <button class="tab" data-tab="recorder">Recorder</button>
+    <button class="tab" data-tab="churn">Støj & automations</button>
+    <button class="tab" data-tab="logs">Logs</button>
+    <button class="tab" data-tab="system">System</button>
+  </nav>
+
+  <main>
+    <section id="tab-overview" class="tab-page active">
+      <div id="health-banner" class="health-banner loading">
+        <div>
+          <div class="eyebrow">Aktuel status</div>
+          <div id="health-title" class="health-title">Indlæser…</div>
+          <div id="health-detail" class="muted">Venter på første måling.</div>
+        </div>
+        <div class="health-side">
+          <div id="health-score" class="health-chip">—</div>
+          <button id="health-action" class="button primary-action hidden">Se hvorfor</button>
+        </div>
+      </div>
+
+      <div id="attention" class="attention hidden"></div>
+      <div id="monitoring-notice" class="monitoring-notice hidden"></div>
+
+      <div id="active-problem" class="panel active-problem hidden">
+        <div class="panel-head">
+          <div><div class="eyebrow">Hvorfor får du advarslen?</div><h2 id="active-problem-title">Aktuelt problem</h2><p id="active-problem-explain">Black Box rangerer de mest sandsynlige bidrag.</p></div>
+          <button id="active-problem-main-action" class="button primary-action">Åbn fuld analyse</button>
+        </div>
+        <div id="active-problem-body"></div>
+      </div>
+
+      <div class="metric-grid">
+        <article class="metric-card"><span>Core CPU</span><strong id="m-cpu">—</strong><small id="m-cpu-sub">—</small></article>
+        <article class="metric-card"><span>Core RAM</span><strong id="m-ram">—</strong><small id="m-ram-sub">—</small></article>
+        <article class="metric-card"><span>Disk ledig</span><strong id="m-disk">—</strong><small id="m-disk-sub">—</small></article>
+        <article class="metric-card"><span>HA API</span><strong id="m-api">—</strong><small id="m-api-sub">—</small></article>
+        <article class="metric-card"><span>State changes</span><strong id="m-events">—</strong><small>seneste 60 sek.</small></article>
+        <article class="metric-card"><span>Recorder</span><strong id="m-recorder">—</strong><small id="m-recorder-sub">—</small></article>
+      </div>
+
+      <div class="panel">
+        <div class="panel-head">
+          <div><h2>Seneste time</h2><p>Kun de signaler der typisk peger frem mod et nedbrud.</p></div>
+          <select id="chart-metric" aria-label="Vælg graf">
+            <option value="core_cpu">Core CPU</option>
+            <option value="core_memory_percent">Core RAM</option>
+            <option value="api_latency_ms">API svartid</option>
+            <option value="state_changes_per_minute">State changes/min</option>
+            <option value="recorder_growth_mb_hour">Recorder-vækst</option>
+            <option value="psi_io">I/O PSI</option>
+          </select>
+        </div>
+        <canvas id="history-chart" height="190"></canvas>
+        <div id="chart-empty" class="empty hidden">Der er endnu ikke nok historik.</div>
+      </div>
+
+      <div class="two-col">
+        <div class="panel">
+          <div class="panel-head"><div><h2>Seneste incident</h2><p>Hvad Black Box senest har fanget.</p></div></div>
+          <div id="last-incident" class="empty">Ingen incidenter endnu.</div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div><h2>Mest støjende lige nu</h2><p>State changes den seneste time.</p></div></div>
+          <div id="top-now" class="compact-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-incidents" class="tab-page">
+      <div class="panel">
+        <div class="panel-head"><div><h2>Incidenter</h2><p>Automatisk opsamlede fejl og kritiske forløb.</p></div><button id="refresh-incidents" class="button ghost">Opdatér</button></div>
+        <div id="incident-list"></div>
+      </div>
+      <div id="incident-detail" class="panel hidden"></div>
+    </section>
+
+    <section id="tab-recorder" class="tab-page">
+      <div class="metric-grid recorder-grid">
+        <article class="metric-card"><span>Database + WAL</span><strong id="r-size">—</strong><small id="r-path">—</small></article>
+        <article class="metric-card"><span>Vækst</span><strong id="r-growth">—</strong><small>beregnet over op til 30 min.</small></article>
+        <article class="metric-card"><span>Core write-rate</span><strong id="r-write">—</strong><small>Docker block writes</small></article>
+        <article class="metric-card"><span>I/O pressure</span><strong id="r-psi">—</strong><small>Linux PSI avg10</small></article>
+      </div>
+      <div class="two-col">
+        <div class="panel"><div class="panel-head"><div><h2>Recorder-filer</h2><p>Black Box læser kun filstørrelser; databasen åbnes ikke.</p></div></div><div id="recorder-parts"></div></div>
+        <div class="panel"><div class="panel-head"><div><h2>Diskfordeling</h2><p>Periodisk Supervisor-scan af datadisken.</p></div></div><div id="disk-breakdown"></div></div>
+      </div>
+      <div class="panel">
+        <div class="panel-head"><div><h2>Recorder-risiko</h2><p>Korrelation mellem databasevækst, event-rate og I/O.</p></div></div>
+        <div id="recorder-risk" class="diagnosis"></div>
+      </div>
+    </section>
+
+    <section id="tab-churn" class="tab-page">
+      <div id="focus-detail" class="panel focus-detail hidden"></div>
+      <div id="problem-overview" class="panel problem-panel">
+        <div class="panel-head"><div><h2>Problemoverblik</h2><p>Hvor kommer event-støj og flapping sandsynligvis fra?</p></div></div>
+        <div id="problem-summary"></div>
+      </div>
+      <div class="two-col">
+        <div class="panel"><div class="panel-head"><div><h2>Aktivitetsgrupper · op til 24 timer</h2><p>Black Box samler relaterede entity-navne, så én integration ikke drukner i hundredvis af linjer.</p></div></div><div id="activity-groups"></div></div>
+        <div class="panel"><div class="panel-head"><div><h2>Flap-grupper · op til 24 timer</h2><p>Hvilke typer entities står samlet for unavailable/unknown-overgangene.</p></div></div><div id="flap-groups"></div></div>
+      </div>
+      <div class="panel"><div class="panel-head"><div><h2>Samtidige flap-bølger</h2><p>Entities der gik unavailable/unknown i samme minut. Mange samtidige entries peger ofte på én fælles integration eller datakilde.</p></div></div><div id="flap-bursts"></div></div>
+      <div class="panel"><div class="panel-head"><div><h2>Relevant konfigurationskontekst</h2><p>Black Box medtager kun allowlistede, diagnostisk relevante settings og udelader credentials og rå stream-URL'er.</p></div></div><div id="config-context"></div></div>
+      <div class="two-col">
+        <div class="panel"><div class="panel-head"><div><h2>Top noisy entities · 24 timer</h2><p>Alle state_changed-events, uafhængigt af Recorder.</p></div></div><div id="noisy-entities"></div></div>
+        <div class="panel"><div class="panel-head"><div><h2>Top flappers · 24 timer</h2><p>Entities der oftest går til unavailable/unknown. Det er normalt her forbindelses- og integrationsflap afsløres.</p></div></div><div id="top-flappers"></div></div>
+      </div>
+      <div class="two-col">
+        <div class="panel"><div class="panel-head"><div><h2>Top automations · 24 timer</h2><p>automation_triggered-events.</p></div></div><div id="noisy-automations"></div></div>
+        <div class="panel"><div class="panel-head"><div><h2>Helper churn · 24 timer</h2><p>input_* / counter / timer / schedule med flest ændringer.</p></div></div><div id="helper-churn"></div></div>
+      </div>
+      <div class="panel"><div class="panel-head"><div><h2>Unavailable / unknown nu</h2><p>Aktuelt snapshot fra Home Assistant, opdateret ca. hvert 5. minut. Dette er et snapshot; Top flappers ovenfor viser historikken.</p></div></div><div id="unavailable-now"></div></div>
+      <div class="panel">
+        <div class="panel-head"><div><h2>Samlet aktivitet · 24 timer</h2></div></div>
+        <div id="churn-totals" class="stats-row"></div>
+      </div>
+    </section>
+
+    <section id="tab-logs" class="tab-page">
+      <div class="panel">
+        <div class="panel-head">
+          <div><h2>Vigtige logs</h2><p>Advarsler, fejl og crash-signaturer. Gentagelser throttles i Black Box-databasen.</p></div>
+          <div class="filters"><select id="log-window"><option value="60">1 time</option><option value="360">6 timer</option><option value="1440">24 timer</option><option value="10080">7 dage</option></select><button id="refresh-logs" class="button ghost">Opdatér</button></div>
+        </div>
+        <div id="log-list" class="log-list"></div>
+      </div>
+    </section>
+
+    <section id="tab-system" class="tab-page">
+      <div class="two-col">
+        <div class="panel"><div class="panel-head"><div><h2>Host & Supervisor</h2></div></div><div id="host-info"></div></div>
+        <div class="panel"><div class="panel-head"><div><h2>Black Box</h2><p>Egen lagring og forbindelser.</p></div><button id="reconnect-event-stream" class="button ghost">Genforbind event-stream</button></div><div id="blackbox-info"></div><div id="event-reconnect-result" class="muted" style="margin-top:8px"></div></div>
+      </div>
+      <div class="panel" id="notification-panel">
+        <div class="panel-head"><div><h2>Kritiske notifikationer</h2><p>ntfy kan varsle direkte fra Black Box, selv når Home Assistant Core eller automations ikke svarer. Ved komplet host-/strømsvigt kræves stadig en ekstern heartbeat-monitor.</p></div><button id="test-direct-notification" class="button ghost">Send PRIORITET 5-test</button></div>
+        <div id="notification-info"></div>
+        <div id="notification-test-result" class="muted" style="margin-top:10px"></div>
+        <div id="ntfy-android-guide" class="notification-guide">
+          <div class="panel-head"><div><h3>Android · anbefalet ntfy-opsætning</h3><p>Kritiske Black Box-incidents sendes som ntfy priority 5 (MAX/URGENT). Advarsler kan valgfrit sendes som priority 4.</p></div><span class="signal-badge observe">ANDROID</span></div>
+          <ol class="setup-steps">
+            <li>Installér <strong>ntfy</strong> på Android og opret et abonnement på et privat, svært gætteligt topic.</li>
+            <li>Åbn HA Black Box-appens <strong>Konfiguration</strong> i Home Assistant og indsæt samme topic i <code>ntfy_topic</code>. Slå <code>direct_critical_notifications</code> til og vælg <code>ntfy</code>.</li>
+            <li>I Android: ntfy → Settings/Indstillinger → Channel settings → <strong>MAX/URGENT</strong>. Vælg tydelig lyd og vibration. Tillad evt. kanalen gennem <strong>Forstyr ikke</strong>.</li>
+            <li>Genstart Black Box efter konfigurationsændringen og brug <strong>Send PRIORITET 5-test</strong> ovenfor.</li>
+          </ol>
+          <div class="topic-helper">
+            <div><small>Forslag til privat topic · genereres kun lokalt i browseren</small><code id="ntfy-topic-suggestion">—</code></div>
+            <div class="topic-actions"><button id="generate-ntfy-topic" class="button ghost">Nyt forslag</button><button id="copy-ntfy-topic" class="button ghost">Kopiér topic</button></div>
+          </div>
+          <div class="config-example"><small>Minimum i app-konfigurationen</small><pre id="ntfy-config-example"></pre></div>
+          <p class="privacy-note">Topic, access token og eventuelt klik-link behandles som følsomme værdier og medsendes ikke i AI-diagnoseeksporten. Push-beskeden indeholder kun en kort sanitiseret diagnose; logs og detaljer bliver lokalt i Black Box.</p>
+        </div>
+      </div>
+      <div class="panel"><div class="panel-head"><div><h2>Apps/add-ons</h2><p>Ressourceforbrug senest målt.</p></div></div><div id="addon-stats"></div></div>
+      <div class="panel"><div class="panel-head"><div><h2>Supervisor Resolution</h2><p>Systemproblemer som Supervisor selv har registreret.</p></div></div><div id="resolution-info"></div></div>
+    </section>
+  </main>
+
+  <footer>HA Black Box 0.1.11 · lokal diagnostik · ingen automatisk purge eller genstart</footer>
+  <script src="static/app-0.1.13.js"></script>
+</body>
+</html>

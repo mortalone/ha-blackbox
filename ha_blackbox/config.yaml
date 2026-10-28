@@ -1,0 +1,117 @@
+name: "HA Black Box"
+version: "0.1.13"
+slug: "ha_blackbox"
+description: >-
+  Independent flight recorder and incident diagnostics for Home Assistant.
+  Watches Core, Supervisor, storage, logs, Recorder growth and event churn.
+arch:
+  - amd64
+  - aarch64
+startup: system
+boot: auto
+init: false
+homeassistant: "2026.4.0"
+hassio_api: true
+hassio_role: manager
+homeassistant_api: true
+ingress: true
+ingress_port: 8099
+ingress_stream: true
+panel_icon: "mdi:shield-search"
+panel_title: "HA Black Box"
+panel_admin: true
+stage: experimental
+watchdog: "http://[HOST]:[PORT:8099]/healthz"
+tmpfs: true
+map:
+  - type: homeassistant_config
+    read_only: true
+    path: /homeassistant
+options:
+  sample_interval_seconds: 5
+  persist_interval_seconds: 15
+  metric_retention_days: 7
+  incident_retention_days: 90
+  important_log_retention_days: 7
+  pre_incident_minutes: 30
+  recovery_minutes: 5
+  monitor_all_apps: true
+  excluded_apps: []
+  persistent_notifications: true
+  notification_service: "persistent_notification.create"
+  direct_critical_notifications: false
+  direct_notification_provider: "ntfy"
+  direct_warning_notifications: false
+  ntfy_server: "https://ntfy.sh"
+  disk_warning_percent: 90
+  disk_critical_percent: 97
+  disk_warning_free_gb: 10
+  disk_critical_free_gb: 2
+  memory_warning_percent: 85
+  memory_critical_percent: 95
+  cpu_warning_percent: 90
+  cpu_critical_percent: 98
+  api_latency_warning_ms: 1000
+  api_latency_critical_ms: 5000
+  state_changes_warning_per_minute: 1000
+  state_changes_critical_per_minute: 3000
+  state_changes_warning_sustain_seconds: 60
+  state_changes_clear_ratio: 0.80
+  unavailable_warning_per_minute: 100
+  unavailable_critical_per_minute: 500
+  noisy_entity_warning_per_hour: 500
+  recorder_growth_warning_mb_per_hour: 250
+  recorder_growth_critical_mb_per_hour: 1000
+  recorder_db_path: "home-assistant_v2.db"
+  detailed_disk_scan_minutes: 15
+  log_initial_lines: 100
+  log_ring_lines: 12000
+schema:
+  sample_interval_seconds: "int(2,60)"
+  persist_interval_seconds: "int(5,300)"
+  metric_retention_days: "int(1,90)"
+  incident_retention_days: "int(7,730)"
+  important_log_retention_days: "int(1,90)"
+  pre_incident_minutes: "int(5,120)"
+  recovery_minutes: "int(1,60)"
+  monitor_all_apps: bool
+  excluded_apps:
+    - str
+  persistent_notifications: bool
+  notification_service: str
+  direct_critical_notifications: bool
+  direct_notification_provider: "list(disabled|ntfy|pushover|telegram|webhook)"
+  direct_warning_notifications: bool
+  ntfy_server: str
+  ntfy_topic: "password?"
+  ntfy_access_token: "password?"
+  ntfy_click_url: "password?"
+  pushover_user_key: "password?"
+  pushover_app_token: "password?"
+  telegram_bot_token: "password?"
+  telegram_chat_id: "password?"
+  direct_webhook_url: "password?"
+  direct_webhook_bearer_token: "password?"
+  disk_warning_percent: "float(50,99)"
+  disk_critical_percent: "float(70,100)"
+  disk_warning_free_gb: "float(0,1000)"
+  disk_critical_free_gb: "float(0,100)"
+  memory_warning_percent: "float(50,99)"
+  memory_critical_percent: "float(70,100)"
+  cpu_warning_percent: "float(50,100)"
+  cpu_critical_percent: "float(70,100)"
+  api_latency_warning_ms: "int(100,30000)"
+  api_latency_critical_ms: "int(500,60000)"
+  state_changes_warning_per_minute: "int(100,100000)"
+  state_changes_critical_per_minute: "int(500,200000)"
+  state_changes_warning_sustain_seconds: "int(15,1800)"
+  state_changes_clear_ratio: "float(0.25,0.95)"
+  unavailable_warning_per_minute: "int(1,100000)"
+  unavailable_critical_per_minute: "int(10,200000)"
+  noisy_entity_warning_per_hour: "int(50,100000)"
+  recorder_growth_warning_mb_per_hour: "float(10,100000)"
+  recorder_growth_critical_mb_per_hour: "float(50,500000)"
+  recorder_db_path: str
+  detailed_disk_scan_minutes: "int(5,1440)"
+  log_initial_lines: "int(10,1000)"
+  log_ring_lines: "int(1000,100000)"
